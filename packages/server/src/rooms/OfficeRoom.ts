@@ -1,7 +1,7 @@
 import { Room, Client } from 'colyseus';
 import { OfficeState } from '../schema/OfficeState';
-import { Agent, OfficeConfig, Office, ConversationMessage } from '@agent-office/core';
-import { OllamaAdapter } from '@agent-office/adapters';
+import { Agent, OfficeConfig, Office, ConversationMessage, InferenceAdapter } from '@agent-office/core';
+import { OllamaAdapter, OpenAICompatibleAdapter } from '@agent-office/adapters';
 import { ToolExecutor } from '../tools/ToolExecutor';
 import { MemoryStore } from '../memory/MemoryStore';
 import { TelegramBridge, BridgeEvent } from '../telegram/TelegramBridge';
@@ -13,7 +13,7 @@ export class OfficeRoom extends Room<OfficeState> {
     private demoTickCount = 0;
     private coreAgents: Map<string, Agent> = new Map();
     private thinkingLocks: Map<string, boolean> = new Map();
-    private ollamaAdapter!: OllamaAdapter;
+    private llmAdapter!: InferenceAdapter;
     private hireCount = 0;
     private toolExecutor = new ToolExecutor();
     private memoryStore!: MemoryStore;
@@ -42,9 +42,27 @@ export class OfficeRoom extends Room<OfficeState> {
         OfficeRoom.activeRoom = this;
         this.setState(new OfficeState());
 
+        // ─── LLM Provider Setup ───
+        const provider = process.env.LLM_PROVIDER || 'groq';
+        let model: string;
+
+        if (provider === 'groq') {
+            const groqKey = process.env.GROQ_API_KEY || '';
+            model = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+            this.llmAdapter = new OpenAICompatibleAdapter(
+                'https://api.groq.com/openai/v1',
+                groqKey,
+                'groq'
+            );
+            console.log(`[OfficeRoom] Using Groq (${model}) — no Ollama needed!`);
+        } else {
+            const ollamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434';
+            model = process.env.LLM_MODEL || 'hermes3:latest';
+            this.llmAdapter = new OllamaAdapter(ollamaUrl);
+            console.log(`[OfficeRoom] Using Ollama (${model}) at ${ollamaUrl}`);
+        }
+
         const ollamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434';
-        const model = process.env.LLM_MODEL || 'hermes3:latest';
-        this.ollamaAdapter = new OllamaAdapter(ollamaUrl);
         this.memoryStore = new MemoryStore(ollamaUrl);
         await this.memoryStore.initialize();
 
@@ -84,7 +102,7 @@ export class OfficeRoom extends Room<OfficeState> {
             });
 
 
-            coreAgent.setInferenceAdapter(this.ollamaAdapter);
+            coreAgent.setInferenceAdapter(this.llmAdapter);
             await coreAgent.initialize();
             const previousMemories = await this.memoryStore.loadMemories(id, 20);
             if (previousMemories.length > 0) {
@@ -546,7 +564,7 @@ export class OfficeRoom extends Room<OfficeState> {
             memory: { shortTermLimit: 50 }
         });
 
-        hireAgent.setInferenceAdapter(this.ollamaAdapter);
+        hireAgent.setInferenceAdapter(this.llmAdapter);
         await hireAgent.initialize();
         this.coreAgents.set(hireId, hireAgent);
         this.thinkingLocks.set(hireId, false);
