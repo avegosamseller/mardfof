@@ -1,10 +1,10 @@
 # Agent Office
 
-**Self-growing AI teams in a pixel-art virtual office — powered by your local LLM.**
+**Self-growing AI teams in a pixel-art virtual office — powered by Groq or your local LLM.**
 
 Watch AI agents walk to desks, think, collaborate, hire interns, assign tasks to each other, execute code, search the web, and grow their team — all rendered in real-time pixel art with persistent memory across sessions.
 
-> **Zero lock-in.** Runs 100% locally with Ollama/Hermes. Swap for any OpenAI-compatible API.
+> **Zero lock-in.** Runs with Groq (blazing fast cloud inference) or 100% locally with Ollama. Swap providers with a single env var.
 
 ---
 
@@ -21,6 +21,7 @@ Watch AI agents walk to desks, think, collaborate, hire interns, assign tasks to
 | 💾 **Persistent Memory** | SQLite-backed memories survive restarts |
 | 🔍 **Semantic Search** | Ollama embeddings + cosine similarity |
 | 💡 **Emote Bubbles** | Action-specific emoji above agent sprites |
+| ⚡ **Groq Support** | Ultra-fast inference via Groq LPU cloud |
 
 ---
 
@@ -30,7 +31,7 @@ Watch AI agents walk to desks, think, collaborate, hire interns, assign tasks to
 agent-office/
 ├── packages/
 │   ├── core/       # Agent state machine, Memory, Tasks, Office grid
-│   ├── adapters/   # OllamaAdapter, OpenAICompatibleAdapter
+│   ├── adapters/   # GroqAdapter, OllamaAdapter, OpenAICompatibleAdapter
 │   ├── server/     # Colyseus rooms, ToolExecutor, MemoryStore (SQLite)
 │   └── ui/         # Phaser.js game + React overlay
 └── docker-compose.yml
@@ -38,7 +39,7 @@ agent-office/
 
 **Data Flow:**
 ```
-LLM (Ollama/Hermes) ←→ Adapter ←→ Agent.think() ←→ Colyseus State ←→ Phaser + React
+LLM (Groq/Ollama) ←→ Adapter ←→ Agent.think() ←→ Colyseus State ←→ Phaser + React
                                         ↕                  ↕
                                  MemoryStore (SQLite)   ToolExecutor
 ```
@@ -57,6 +58,8 @@ LLM (Ollama/Hermes) ←→ Adapter ←→ Agent.think() ←→ Colyseus State �
 
 ## Quick Start (Local Development)
 
+### Option A: Using Groq (Recommended — Fastest)
+
 ```bash
 # 1. Clone
 git clone https://github.com/avegosamseller/mardfof.git
@@ -65,8 +68,9 @@ cd mardfof
 # 2. Install dependencies
 npm install
 
-# 3. Pull model (adjust to your model)
-ollama pull hermes3
+# 3. Configure environment
+cp .env.example .env
+# Edit .env and add your GROQ_API_KEY (get it at https://console.groq.com)
 
 # 4. Build all packages
 npm run build
@@ -78,22 +82,63 @@ npm run start
 npm run start:ui
 ```
 
+### Option B: Using Ollama (Local/Offline)
+
+```bash
+# 1. Clone
+git clone https://github.com/avegosamseller/mardfof.git
+cd mardfof
+
+# 2. Install dependencies
+npm install
+
+# 3. Configure environment
+cp .env.example .env
+# Edit .env:
+#   LLM_PROVIDER=ollama
+#   LLM_MODEL=hermes3:latest
+
+# 4. Pull model
+ollama pull hermes3
+
+# 5. Build all packages
+npm run build
+
+# 6. Start server (Terminal 1)
+npm run start
+
+# 7. Start UI (Terminal 2)
+npm run start:ui
+```
+
 Open **http://localhost:5173** — watch Alice and Bob come alive!
 
 ---
 
 ## Docker Deployment
 
+### With Groq (no GPU needed):
 ```bash
+# Set your Groq API key
+export GROQ_API_KEY=gsk_your_key_here
+
 docker compose up --build
 ```
 
+### With Ollama (GPU/local):
+```bash
+export LLM_PROVIDER=ollama
+export LLM_MODEL=hermes3:latest
+
+docker compose --profile ollama up --build
+```
+
 This starts:
-- **Ollama** (port 11434) with GPU passthrough
 - **Server** (port 3000) — Colyseus + REST API
 - **UI** (port 80) — Nginx serving built frontend
+- **Ollama** (port 11434, only with `--profile ollama`) with GPU passthrough
 
-> For CPU-only: remove `deploy.resources` from `docker-compose.yml`
+> For CPU-only Ollama: remove `deploy.resources` from `docker-compose.yml`
 
 ---
 
@@ -104,41 +149,33 @@ This starts:
 Copy `.env.example` to `.env` and configure:
 
 ```env
-# LLM endpoint
+# Provider: "groq" (default) or "ollama"
+LLM_PROVIDER=groq
+
+# Model selection
+# Groq: llama-3.3-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768, gemma2-9b-it
+# Ollama: hermes3:latest, llama3:latest, etc.
+LLM_MODEL=llama-3.3-70b-versatile
+
+# Groq (get key at https://console.groq.com)
+GROQ_API_KEY=gsk_your_api_key_here
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+
+# Ollama (local inference)
 OLLAMA_URL=http://localhost:11434
-LLM_MODEL=hermes3:latest
 
-# For OpenAI-compatible endpoint (homeserver, etc.)
-# OPENAI_BASE_URL=http://your-homeserver:8080/v1
-# OPENAI_API_KEY=your-key
-
-# Server port
+# Server
 PORT=3000
 ```
 
-### Using Your Hermes Agent (Homeserver)
+### Groq Models (Recommended)
 
-If you run Hermes via Ollama on your homeserver:
-
-```env
-OLLAMA_URL=http://YOUR_HOMESERVER_IP:11434
-LLM_MODEL=hermes3:latest
-```
-
-If you have an OpenAI-compatible endpoint:
-
-Edit `packages/server/src/rooms/OfficeRoom.ts` and swap the adapter:
-
-```typescript
-import { OpenAICompatibleAdapter } from '@agent-office/adapters';
-
-// Replace OllamaAdapter with:
-private adapter = new OpenAICompatibleAdapter(
-    'http://your-homeserver:8080/v1',
-    'your-api-key',
-    'hermes'
-);
-```
+| Model | Speed | Quality | Best For |
+|-------|-------|---------|----------|
+| `llama-3.3-70b-versatile` | Fast | Excellent | Default, best overall |
+| `llama-3.1-8b-instant` | Ultra-fast | Good | Quick responses, lower cost |
+| `mixtral-8x7b-32768` | Fast | Great | Long context tasks |
+| `gemma2-9b-it` | Ultra-fast | Good | Lightweight tasks |
 
 ### Adding/Customizing Agents
 
@@ -174,7 +211,7 @@ To bridge your Telegram Hermes agent:
 | Package | Description |
 |---------|-------------|
 | `@agent-office/core` | Agent lifecycle, Office grid, Task system, Memory |
-| `@agent-office/adapters` | OllamaAdapter, OpenAICompatibleAdapter, PromptBuilder |
+| `@agent-office/adapters` | GroqAdapter, OllamaAdapter, OpenAICompatibleAdapter, PromptBuilder |
 | `@agent-office/server` | Colyseus room, ToolExecutor, MemoryStore (SQLite) |
 | `@agent-office/ui` | Phaser.js renderer + React overlay |
 

@@ -5,7 +5,7 @@ export interface ToolDefinition {
 }
 
 export interface InferenceConfig {
-    provider: 'ollama' | 'openai' | 'custom';
+    provider: 'ollama' | 'openai' | 'groq' | 'custom';
     model: string;
     baseUrl?: string;
     apiKey?: string;

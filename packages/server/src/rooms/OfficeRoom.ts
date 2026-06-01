@@ -1,7 +1,7 @@
 import { Room, Client } from 'colyseus';
 import { OfficeState } from '../schema/OfficeState';
-import { Agent, OfficeConfig, Office, ConversationMessage } from '@agent-office/core';
-import { OllamaAdapter } from '@agent-office/adapters';
+import { Agent, OfficeConfig, Office, ConversationMessage, InferenceAdapter } from '@agent-office/core';
+import { OllamaAdapter, GroqAdapter } from '@agent-office/adapters';
 import { ToolExecutor } from '../tools/ToolExecutor';
 import { MemoryStore } from '../memory/MemoryStore';
 
@@ -12,7 +12,7 @@ export class OfficeRoom extends Room<OfficeState> {
     private demoTickCount = 0;
     private coreAgents: Map<string, Agent> = new Map();
     private thinkingLocks: Map<string, boolean> = new Map();
-    private ollamaAdapter!: OllamaAdapter;
+    private inferenceAdapter!: InferenceAdapter;
     private hireCount = 0;
     private toolExecutor = new ToolExecutor();
     private memoryStore!: MemoryStore;
@@ -39,8 +39,20 @@ export class OfficeRoom extends Room<OfficeState> {
         this.setState(new OfficeState());
 
         const ollamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434';
-        const model = process.env.LLM_MODEL || 'hermes3:latest';
-        this.ollamaAdapter = new OllamaAdapter(ollamaUrl);
+        const model = process.env.LLM_MODEL || 'llama-3.3-70b-versatile';
+        const llmProvider = process.env.LLM_PROVIDER || 'groq';
+
+        // Select inference adapter based on LLM_PROVIDER env var
+        if (llmProvider === 'groq') {
+            const groqApiKey = process.env.GROQ_API_KEY || '';
+            const groqBaseUrl = process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1';
+            this.inferenceAdapter = new GroqAdapter(groqApiKey, groqBaseUrl);
+            console.log(`[Server] Using Groq adapter (model: ${model})`);
+        } else {
+            this.inferenceAdapter = new OllamaAdapter(ollamaUrl);
+            console.log(`[Server] Using Ollama adapter (url: ${ollamaUrl}, model: ${model})`);
+        }
+
         this.memoryStore = new MemoryStore(ollamaUrl);
         await this.memoryStore.initialize();
 
@@ -61,7 +73,7 @@ export class OfficeRoom extends Room<OfficeState> {
             const coreAgent = new Agent({
                 id, name, role, avatar: 'sprite.png',
                 inference: {
-                    provider: 'ollama', model,
+                    provider: (llmProvider as 'ollama' | 'groq'), model,
                     systemPrompt: `You are ${name}, a ${role} in a virtual office. Be social, do your work, and collaborate. Keep thoughts SHORT.`,
                 },
                 personality: {
@@ -80,7 +92,7 @@ export class OfficeRoom extends Room<OfficeState> {
             });
 
 
-            coreAgent.setInferenceAdapter(this.ollamaAdapter);
+            coreAgent.setInferenceAdapter(this.inferenceAdapter);
             await coreAgent.initialize();
             const previousMemories = await this.memoryStore.loadMemories(id, 20);
             if (previousMemories.length > 0) {
@@ -264,7 +276,8 @@ export class OfficeRoom extends Room<OfficeState> {
 
 
     private async handleHire(hirer: Agent, params: any) {
-        const model = process.env.LLM_MODEL || 'hermes3:latest';
+        const model = process.env.LLM_MODEL || 'llama-3.3-70b-versatile';
+        const llmProvider = process.env.LLM_PROVIDER || 'groq';
         const names = ['Charlie', 'Diana', 'Eve', 'Frank', 'Grace'];
         const hireName = params.name || names[this.hireCount % 5];
         const hireRole = params.role || 'Intern';
@@ -282,7 +295,7 @@ export class OfficeRoom extends Room<OfficeState> {
         const hireAgent = new Agent({
             id: hireId, name: hireName, role: hireRole, avatar: 'sprite.png',
             inference: {
-                provider: 'ollama', model,
+                provider: (llmProvider as 'ollama' | 'groq'), model,
                 systemPrompt: `You are ${hireName}, a ${hireRole} hired by ${hirer.config.name}. Be enthusiastic and helpful. Keep thoughts SHORT.`,
             },
             personality: {
@@ -299,7 +312,7 @@ export class OfficeRoom extends Room<OfficeState> {
             memory: { shortTermLimit: 50 }
         });
 
-        hireAgent.setInferenceAdapter(this.ollamaAdapter);
+        hireAgent.setInferenceAdapter(this.inferenceAdapter);
         await hireAgent.initialize();
         this.coreAgents.set(hireId, hireAgent);
         this.thinkingLocks.set(hireId, false);
