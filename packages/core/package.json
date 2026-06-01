@@ -1,0 +1,15 @@
+{
+  "name": "@agent-office/core",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "easystarjs": "^0.4.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.2"
+  }
+}

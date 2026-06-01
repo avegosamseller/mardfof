@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: agent-office-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  server:
+    build:
+      context: .
+      dockerfile: packages/server/Dockerfile
+    container_name: agent-office-server
+    ports:
+      - "3000:3000"
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - LLM_MODEL=hermes3:latest
+      - PORT=3000
+    depends_on:
+      - ollama
+    volumes:
+      - server_data:/app/data
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: .
+      dockerfile: packages/ui/Dockerfile
+    container_name: agent-office-ui
+    ports:
+      - "80:80"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  server_data:

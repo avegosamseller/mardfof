@@ -1,0 +1,16 @@
+{
+  "name": "agent-office",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev --workspaces --if-present",
+    "start": "npm run start --workspace=@agent-office/server",
+    "start:ui": "npm run dev --workspace=@agent-office/ui"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.2"
+  }
+}
