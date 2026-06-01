@@ -4,6 +4,7 @@ import { Agent, OfficeConfig, Office, ConversationMessage } from '@agent-office/
 import { OllamaAdapter } from '@agent-office/adapters';
 import { ToolExecutor } from '../tools/ToolExecutor';
 import { MemoryStore } from '../memory/MemoryStore';
+import { TelegramBridge, BridgeEvent } from '../telegram/TelegramBridge';
 
 export class OfficeRoom extends Room<OfficeState> {
     private static activeRoom: OfficeRoom | null = null;
@@ -18,6 +19,9 @@ export class OfficeRoom extends Room<OfficeState> {
     private memoryStore!: MemoryStore;
     private sessionId = `session_${Date.now()}`;
     private currentLayout: any[] = [];
+    private telegramBridge?: TelegramBridge;
+    private bossContext: string = ''; // Global context/direction from Hermes
+    private recentChatLog: string[] = []; // For reporting to Hermes
 
 
     private furnitureTargets: Record<string, { x: number; y: number }> = {
@@ -62,7 +66,7 @@ export class OfficeRoom extends Room<OfficeState> {
                 id, name, role, avatar: 'sprite.png',
                 inference: {
                     provider: 'ollama', model,
-                    systemPrompt: `You are ${name}, a ${role} in a virtual office. Be social, do your work, and collaborate. Keep thoughts SHORT.`,
+                    systemPrompt: `You are ${name}, a ${role} in a virtual office. Your boss is Hermes who gives directives via messages. Follow the boss's instructions, be social, do your work, and collaborate with colleagues. If the boss asks a question, reply to "Hermes (Boss)". Keep thoughts SHORT.`,
                 },
                 personality: {
                     traits: { openness: 0.8, conscientiousness: 0.9, extraversion: 0.6, agreeableness: 0.7, neuroticism: 0.1 },
@@ -121,7 +125,237 @@ export class OfficeRoom extends Room<OfficeState> {
             this.broadcast('layout-sync', { name: 'default', layout: this.currentLayout });
         });
 
+        // ─── TELEGRAM BRIDGE (Hermes as Boss) ───
+        await this.initTelegramBridge();
+
         this.setSimulationInterval((delta) => this.update(delta), 100);
+    }
+
+    /**
+     * Initialize Telegram Bridge - connects Hermes as the boss of the office
+     */
+    private async initTelegramBridge(): Promise<void> {
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        const hermesChatId = process.env.TELEGRAM_CHAT_ID;
+
+        if (!botToken || !hermesChatId) {
+            console.log('[OfficeRoom] No TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID set. Running without Hermes.');
+            return;
+        }
+
+        this.telegramBridge = new TelegramBridge({
+            botToken,
+            hermesChatId,
+            reportInterval: Number(process.env.TELEGRAM_REPORT_INTERVAL || 0)
+        });
+
+        // ─── Handle: /task <description> ───
+        this.telegramBridge.on('task', async (event: BridgeEvent) => {
+            const title = event.content;
+            const targetId = this.autoAssignAgent();
+            const agent = this.coreAgents.get(targetId);
+            const agentState = this.state.agents.get(targetId);
+
+            if (agent && agentState) {
+                agent.currentTask = title;
+                agentState.currentTask = title;
+                await this.memoryStore.createTask(title, targetId);
+
+                // Inject boss memory into agent
+                agent.addMemory({
+                    content: `Boss (Hermes) assigned task: "${title}"`,
+                    type: 'observation',
+                    timestamp: new Date().toISOString(),
+                    importance: 0.95
+                });
+
+                this.broadcast('chat', { sender: '👑 Hermes', text: `Assigned: "${title}" → ${agentState.name}` });
+                this.broadcast('task-update', { agentId: targetId, agentName: agentState.name, task: title, status: 'in_progress' });
+                this.logChat(`Hermes assigned "${title}" to ${agentState.name}`);
+
+                await this.telegramBridge!.sendToHermes(`✅ Task assigned to *${agentState.name}* (${agent.config.role}):\n"${title}"`);
+            }
+        });
+
+        // ─── Handle: /context <text> ───
+        this.telegramBridge.on('context', async (event: BridgeEvent) => {
+            this.bossContext = event.content;
+
+            // Inject context into ALL agents as high-importance memory
+            for (const [id, agent] of this.coreAgents) {
+                agent.addMemory({
+                    content: `Boss directive: ${event.content}`,
+                    type: 'observation',
+                    timestamp: new Date().toISOString(),
+                    importance: 1.0
+                });
+            }
+
+            this.broadcast('chat', { sender: '👑 Hermes', text: `Context set: "${event.content}"` });
+            this.logChat(`Hermes set context: "${event.content}"`);
+            await this.telegramBridge!.sendToHermes(`✅ Context set for all agents:\n"${event.content}"`);
+        });
+
+        // ─── Handle: /ask <question> ───
+        this.telegramBridge.on('question', async (event: BridgeEvent) => {
+            const question = event.content;
+
+            // Send question to all agents as a message from the boss
+            for (const [id, agent] of this.coreAgents) {
+                const msg: ConversationMessage = {
+                    from: 'Hermes (Boss)',
+                    to: agent.config.name,
+                    content: question,
+                    timestamp: new Date().toISOString()
+                };
+                agent.receiveMessage(msg);
+            }
+
+            this.broadcast('chat', { sender: '👑 Hermes', text: `Asks: "${question}"` });
+            this.logChat(`Hermes asked: "${question}"`);
+            await this.telegramBridge!.sendToHermes(`✅ Question sent to all agents. They will respond in their next think cycle (~15s).`);
+        });
+
+        // ─── Handle: /directive (plain message) ───
+        this.telegramBridge.on('directive', async (event: BridgeEvent) => {
+            // Treat as a high-priority instruction for all agents
+            for (const [id, agent] of this.coreAgents) {
+                agent.addMemory({
+                    content: `Boss says: "${event.content}"`,
+                    type: 'observation',
+                    timestamp: new Date().toISOString(),
+                    importance: 0.9
+                });
+                const msg: ConversationMessage = {
+                    from: 'Hermes (Boss)',
+                    to: agent.config.name,
+                    content: event.content,
+                    timestamp: new Date().toISOString()
+                };
+                agent.receiveMessage(msg);
+            }
+
+            this.broadcast('chat', { sender: '👑 Hermes', text: event.content });
+            this.logChat(`Hermes: "${event.content}"`);
+            await this.telegramBridge!.sendToHermes(`✅ Directive delivered to all agents.`);
+        });
+
+        // ─── Handle: /status ───
+        this.telegramBridge.on('status', async () => {
+            await this.sendStatusToHermes();
+        });
+
+        // ─── Handle: /report ───
+        this.telegramBridge.on('report', async () => {
+            await this.sendReportToHermes();
+        });
+
+        // ─── Handle: /hire <name> <role> ───
+        this.telegramBridge.on('hire', async (event: BridgeEvent) => {
+            const name = event.params?.name || 'NewHire';
+            const role = event.params?.role || 'Intern';
+
+            // Use first existing agent as "hirer" proxy for Hermes
+            const firstAgent = this.coreAgents.values().next().value;
+            if (firstAgent) {
+                await this.handleHire(firstAgent, { name, role });
+                await this.telegramBridge!.sendToHermes(`✅ Hired *${name}* as *${role}*. They're entering the office now.`);
+            }
+        });
+
+        // ─── Handle: /fire <name> ───
+        this.telegramBridge.on('fire', async (event: BridgeEvent) => {
+            const name = event.content.toLowerCase();
+            let fired = false;
+            for (const [id, agent] of this.coreAgents) {
+                if (agent.config.name.toLowerCase() === name && id !== 'alice' && id !== 'bob') {
+                    this.coreAgents.delete(id);
+                    this.thinkingLocks.delete(id);
+                    this.state.removeAgent(id);
+                    this.broadcast('chat', { sender: '👑 Hermes', text: `${agent.config.name} has been removed from the team.` });
+                    await this.telegramBridge!.sendToHermes(`✅ *${agent.config.name}* removed from the office.`);
+                    fired = true;
+                    break;
+                }
+            }
+            if (!fired) {
+                await this.telegramBridge!.sendToHermes(`❌ Could not find agent "${event.content}" (core agents Alice/Bob cannot be fired).`);
+            }
+        });
+
+        // Start the bridge
+        try {
+            await this.telegramBridge.start();
+            console.log('[OfficeRoom] Telegram Bridge started — Hermes is the boss!');
+        } catch (err) {
+            console.error('[OfficeRoom] Failed to start Telegram Bridge:', err);
+            this.telegramBridge = undefined;
+        }
+    }
+
+    /**
+     * Send current office status to Hermes
+     */
+    private async sendStatusToHermes(): Promise<void> {
+        if (!this.telegramBridge) return;
+
+        let msg = '🏢 *Office Status*\n\n';
+        this.coreAgents.forEach((agent, id) => {
+            const state = this.state.agents.get(id);
+            const emoji = state?.action === 'work' ? '💻' : state?.action === 'talk' ? '💬' : '😌';
+            msg += `${emoji} *${agent.config.name}* (${agent.config.role})\n`;
+            msg += `   Task: ${agent.currentTask || 'none'}\n`;
+            if (state?.thought) msg += `   Thinking: _"${state.thought}"_\n`;
+            msg += '\n';
+        });
+
+        if (this.bossContext) {
+            msg += `📋 *Current Context:* "${this.bossContext}"\n`;
+        }
+
+        msg += `\n⏱ Agents: ${this.coreAgents.size} | Uptime: ${Math.floor(process.uptime() / 60)}m`;
+        await this.telegramBridge.sendToHermes(msg);
+    }
+
+    /**
+     * Send full report to Hermes
+     */
+    private async sendReportToHermes(): Promise<void> {
+        if (!this.telegramBridge) return;
+
+        const agents: { name: string; status: string; currentTask: string; lastThought: string }[] = [];
+        this.coreAgents.forEach((agent, id) => {
+            const state = this.state.agents.get(id);
+            agents.push({
+                name: agent.config.name,
+                status: state?.action || 'idle',
+                currentTask: agent.currentTask || '',
+                lastThought: state?.thought || ''
+            });
+        });
+
+        await this.telegramBridge.sendReport({
+            agents,
+            completedTasks: [],
+            activeConversations: this.recentChatLog.slice(-10)
+        });
+    }
+
+    /**
+     * Log chat for reporting
+     */
+    private logChat(text: string): void {
+        this.recentChatLog.push(text);
+        if (this.recentChatLog.length > 50) this.recentChatLog.shift();
+    }
+
+    /**
+     * Notify Hermes about important agent events
+     */
+    private async notifyHermes(event: string, details: string): Promise<void> {
+        if (this.telegramBridge) {
+            await this.telegramBridge.notifyEvent(event, details);
+        }
     }
 
     private autoAssignAgent(): string {
@@ -180,10 +414,16 @@ export class OfficeRoom extends Room<OfficeState> {
                             };
                             targetAgent.receiveMessage(msg);
                             this.broadcast('chat', { sender: coreAgent.config.name, text: `(to ${targetAgent.config.name}): ${decision.message}` });
+                            this.logChat(`${coreAgent.config.name} → ${targetAgent.config.name}: "${decision.message}"`);
                             await this.memoryStore.saveMemory(id, {
                                 content: `Said to ${targetAgent.config.name}: "${decision.message}"`,
                                 type: 'conversation', timestamp: this.state.officeTime, importance: 0.7
                             }, this.sessionId);
+
+                            // If agent is responding to Hermes, forward to Telegram
+                            if (targetName.toLowerCase().includes('hermes') || targetName.toLowerCase().includes('boss')) {
+                                await this.notifyHermes(`${coreAgent.config.name} responds`, decision.message);
+                            }
                         }
                         coreAgent.clearInbox();
                     }
@@ -209,6 +449,13 @@ export class OfficeRoom extends Room<OfficeState> {
                             const result = await this.toolExecutor.execute(decision.toolCall.name, decision.toolCall.params);
                             this.broadcast('chat', { sender: coreAgent.config.name, text: `Used [${decision.toolCall.name}]: ${result.success ? result.output.slice(0, 100) : result.error}` });
                             coreAgent.addMemory({ content: `Tool ${decision.toolCall.name}: ${result.output.slice(0, 200)}`, type: 'task_result', timestamp: this.state.officeTime, importance: 0.8 });
+                            this.logChat(`${coreAgent.config.name} used tool [${decision.toolCall.name}]`);
+
+                            // Notify Hermes about tool usage
+                            await this.notifyHermes(
+                                `${coreAgent.config.name} used ${decision.toolCall.name}`,
+                                result.success ? result.output.slice(0, 200) : `Error: ${result.error}`
+                            );
                         }
                     }
 
@@ -322,6 +569,10 @@ export class OfficeRoom extends Room<OfficeState> {
     async onDispose() {
         console.log("Room disposing... saving memories");
         OfficeRoom.activeRoom = null;
+        if (this.telegramBridge) {
+            await this.telegramBridge.sendToHermes('🏢 Agent Office is shutting down. See you next time, boss.');
+            this.telegramBridge.stop();
+        }
         for (const [id, agent] of this.coreAgents) {
             await this.memoryStore.saveMemories(id, agent.memories, this.sessionId);
         }

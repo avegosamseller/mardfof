@@ -1,84 +1,134 @@
 # Agent Office
 
-**Self-growing AI teams in a pixel-art virtual office — powered by your local LLM.**
+**AI agent team in a pixel-art virtual office — controlled by your Hermes Telegram bot.**
 
-Watch AI agents walk to desks, think, collaborate, hire interns, assign tasks to each other, execute code, search the web, and grow their team — all rendered in real-time pixel art with persistent memory across sessions.
-
-> **Zero lock-in.** Runs 100% locally with Ollama/Hermes. Swap for any OpenAI-compatible API.
+Hermes is the **boss**. He gives context, assigns tasks, and directs the team. The agents in the office (Alice, Bob, etc.) **execute the work** autonomously — thinking, collaborating, using tools, and reporting back to Hermes.
 
 ---
 
-## Features
+## How It Works
 
-| Feature | Description |
+```
+┌─────────────────────────────────────────────────────────┐
+│  YOU (Telegram)                                          │
+│  Chat with Hermes bot                                   │
+│  /task Build the login page                             │
+│  /context We're building a SaaS product                 │
+│  /status                                                │
+└──────────────────────┬──────────────────────────────────┘
+                       │ Telegram API
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│  TelegramBridge                                          │
+│  Translates commands → Agent Office actions              │
+│  Reports agent progress back to Telegram                 │
+└──────────────────────┬──────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│  Agent Office Server (Colyseus)                          │
+│  Alice (Engineer) + Bob (PM) + hired agents              │
+│  Think every 15s → Act → Collaborate → Use tools         │
+│  Memory persists in SQLite                               │
+└──────────────────────┬──────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│  LLM (Ollama + Hermes3 on your homeserver)               │
+│  Powers agent thinking                                   │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Telegram Commands (Hermes as Boss)
+
+| Command | What it does |
 |---------|-------------|
-| 🧠 **LLM-Powered Agents** | Each agent has their own brain with personality traits |
-| 💬 **Agent-to-Agent Chat** | Agents talk to each other autonomously |
-| 🎯 **Click-to-Follow** | Click any agent to have the camera track them |
-| 📋 **Task Assignment** | Assign tasks from the UI or let agents create them |
-| 🤝 **Dynamic Hiring** | Agents can hire new team members on their own |
-| 🔧 **Tool Execution** | Sandboxed JS execution, web search, note-taking |
-| 💾 **Persistent Memory** | SQLite-backed memories survive restarts |
-| 🔍 **Semantic Search** | Ollama embeddings + cosine similarity |
-| 💡 **Emote Bubbles** | Action-specific emoji above agent sprites |
+| `/task <desc>` | Assign a task to the best available agent |
+| `/context <text>` | Set global direction for all agents (high priority) |
+| `/ask <question>` | Ask all agents a question (they reply next cycle) |
+| `/status` | Get current status of all agents |
+| `/report` | Get full detailed report |
+| `/hire <name> <role>` | Hire a new agent into the office |
+| `/fire <name>` | Remove an agent |
+| *(any message)* | Treated as a directive from the boss |
 
----
-
-## Architecture
-
-```
-agent-office/
-├── packages/
-│   ├── core/       # Agent state machine, Memory, Tasks, Office grid
-│   ├── adapters/   # OllamaAdapter, OpenAICompatibleAdapter
-│   ├── server/     # Colyseus rooms, ToolExecutor, MemoryStore (SQLite)
-│   └── ui/         # Phaser.js game + React overlay
-└── docker-compose.yml
-```
-
-**Data Flow:**
-```
-LLM (Ollama/Hermes) ←→ Adapter ←→ Agent.think() ←→ Colyseus State ←→ Phaser + React
-                                        ↕                  ↕
-                                 MemoryStore (SQLite)   ToolExecutor
-```
+**Agents automatically report back** when they:
+- Respond to your question
+- Complete a tool execution
+- Have an important conversation
 
 ---
 
 ## Requirements
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| **Node.js** | >= 18 | Runtime |
-| **npm** | >= 9 | Package manager |
-| **Ollama** | Latest | Local LLM inference |
+| Tool | Purpose |
+|------|---------|
+| **Node.js** >= 18 | Runtime |
+| **Ollama** | LLM on your homeserver |
+| **Telegram Bot** | Created via @BotFather |
 
 ---
 
-## Quick Start (Local Development)
+## Setup
+
+### 1. Create Telegram Bot
+
+1. Open Telegram, search for `@BotFather`
+2. Send `/newbot`, follow instructions
+3. Copy the bot token
+
+### 2. Get Your Chat ID
+
+1. Start a chat with your new bot
+2. Send any message
+3. Open: `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`
+4. Find `"chat":{"id": 123456789}` — that's your chat ID
+
+### 3. Install & Configure
 
 ```bash
-# 1. Clone
 git clone https://github.com/avegosamseller/mardfof.git
 cd mardfof
-
-# 2. Install dependencies
 npm install
 
-# 3. Pull model (adjust to your model)
-ollama pull hermes3
-
-# 4. Build all packages
-npm run build
-
-# 5. Start server (Terminal 1)
-npm run start
-
-# 6. Start UI (Terminal 2)
-npm run start:ui
+# Create .env file
+cp .env.example .env
 ```
 
-Open **http://localhost:5173** — watch Alice and Bob come alive!
+Edit `.env`:
+```env
+OLLAMA_URL=http://localhost:11434
+LLM_MODEL=hermes3:latest
+TELEGRAM_BOT_TOKEN=7123456789:AAH...your-token
+TELEGRAM_CHAT_ID=123456789
+```
+
+### 4. Pull the model & run
+
+```bash
+ollama pull hermes3
+npm run build
+npm run start        # Server + Telegram Bridge
+npm run start:ui     # (Optional) Visual UI on localhost:5173
+```
+
+### 5. Test it!
+
+Open Telegram, send to your bot:
+```
+/status
+```
+
+You should get a response showing Alice and Bob in the office.
+
+Then try:
+```
+/task Build a REST API for user authentication
+```
+
+Watch Alice pick it up and start working!
 
 ---
 
@@ -88,109 +138,66 @@ Open **http://localhost:5173** — watch Alice and Bob come alive!
 docker compose up --build
 ```
 
-This starts:
-- **Ollama** (port 11434) with GPU passthrough
-- **Server** (port 3000) — Colyseus + REST API
-- **UI** (port 80) — Nginx serving built frontend
+Make sure to set env vars in `docker-compose.yml` or a `.env` file.
 
-> For CPU-only: remove `deploy.resources` from `docker-compose.yml`
+---
+
+## Architecture
+
+```
+packages/
+├── core/       → Agent brain, memory, task system, grid
+├── adapters/   → OllamaAdapter, OpenAICompatibleAdapter
+├── server/
+│   ├── rooms/        → OfficeRoom (main game loop)
+│   ├── telegram/     → TelegramBridge (Hermes connection)
+│   ├── tools/        → ToolExecutor (code, search, notes)
+│   ├── memory/       → MemoryStore (SQLite + embeddings)
+│   └── schema/       → Colyseus state schema
+└── ui/         → Phaser.js pixel-art + React overlay
+```
 
 ---
 
 ## Configuration
 
-### Environment Variables
+### Change LLM Model
 
-Copy `.env.example` to `.env` and configure:
-
+In `.env`:
 ```env
-# LLM endpoint
-OLLAMA_URL=http://localhost:11434
-LLM_MODEL=hermes3:latest
-
-# For OpenAI-compatible endpoint (homeserver, etc.)
-# OPENAI_BASE_URL=http://your-homeserver:8080/v1
-# OPENAI_API_KEY=your-key
-
-# Server port
-PORT=3000
+LLM_MODEL=llama3.2:latest
+# or
+LLM_MODEL=mistral:latest
 ```
 
-### Using Your Hermes Agent (Homeserver)
+### Auto-Reports to Telegram
 
-If you run Hermes via Ollama on your homeserver:
-
+Set interval (in milliseconds):
 ```env
-OLLAMA_URL=http://YOUR_HOMESERVER_IP:11434
-LLM_MODEL=hermes3:latest
+TELEGRAM_REPORT_INTERVAL=300000  # Every 5 minutes
 ```
 
-If you have an OpenAI-compatible endpoint:
+### Add More Agents
 
-Edit `packages/server/src/rooms/OfficeRoom.ts` and swap the adapter:
-
-```typescript
-import { OpenAICompatibleAdapter } from '@agent-office/adapters';
-
-// Replace OllamaAdapter with:
-private adapter = new OpenAICompatibleAdapter(
-    'http://your-homeserver:8080/v1',
-    'your-api-key',
-    'hermes'
-);
+From Telegram:
+```
+/hire Charlie Designer
+/hire Diana Engineer
 ```
 
-### Adding/Customizing Agents
-
-Edit `packages/server/src/rooms/OfficeRoom.ts`:
-
-```typescript
-await setupCoreAgent('charlie', 'Charlie', 'Designer', 15, 15);
-```
-
-### Adding Custom Tools
-
-Edit `packages/server/src/tools/ToolExecutor.ts`:
-
-```typescript
-case 'my_custom_tool':
-    return this.myCustomFunction(params);
-```
+Or edit `OfficeRoom.ts` to add permanent agents.
 
 ---
 
-## Connecting to Telegram Bot
+## What Agents Can Do
 
-To bridge your Telegram Hermes agent:
-
-1. Create a relay server that receives prompts via HTTP and forwards to your Telegram bot
-2. Or expose your Ollama endpoint that Hermes uses
-3. Point `OLLAMA_URL` to wherever your model lives
-
----
-
-## Package Details
-
-| Package | Description |
-|---------|-------------|
-| `@agent-office/core` | Agent lifecycle, Office grid, Task system, Memory |
-| `@agent-office/adapters` | OllamaAdapter, OpenAICompatibleAdapter, PromptBuilder |
-| `@agent-office/server` | Colyseus room, ToolExecutor, MemoryStore (SQLite) |
-| `@agent-office/ui` | Phaser.js renderer + React overlay |
-
----
-
-## How It Works
-
-```
-Open browser → pixel-art office loads → Alice & Bob spawn
-  → Each agent thinks every ~15s via LLM
-  → LLM returns: { thought, action, target, toolCall }
-  → Server executes action (move, talk, use_tool, hire)
-  → Colyseus syncs to all browsers in real-time
-  → SQLite + embeddings persist everything
-  → Agents can hire new members (max 7)
-```
+| Capability | Description |
+|-----------|-------------|
+| `code_execute` | Run JavaScript in sandbox |
+| `web_search` | Search DuckDuckGo |
+| `write_note` | Save notes |
+| `create_task` | Create & assign tasks to each other |
+| `hire_agent` | Hire new team members |
 
 ---
 
