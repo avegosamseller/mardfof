@@ -12,9 +12,9 @@ export function getColyseusRoom() {
 function resolveWsEndpoint(): string {
     if (typeof window !== 'undefined') {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${protocol}//${window.location.hostname}:3000`;
+        return `${protocol}//${window.location.hostname}:4890`;
     }
-    return 'ws://localhost:3000';
+    return 'ws://localhost:4890';
 }
 
 

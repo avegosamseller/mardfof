@@ -15,7 +15,7 @@ const colyseusServer = new Server({ server: httpServer });
 
 colyseusServer.define('office', OfficeRoom);
 
-const PORT = Number(process.env.PORT || 3000);
+const PORT = Number(process.env.PORT || 4890);
 colyseusServer.listen(PORT).then(() => {
     console.log(`[Server] AgentOffice listening on ws://localhost:${PORT}`);
 });
